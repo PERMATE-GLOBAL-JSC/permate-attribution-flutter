@@ -1,0 +1,63 @@
+name: Release PR check
+
+# Read-only validation of pull requests into main, including the production render
+# opened by the organization's GitHub App. The `release-pr-check` job is a required
+# status check in the main ruleset.
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: release-pr-check-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+env:
+  FLUTTER_VERSION: "3.47.6"
+  FLUTTER_SHA256: "a1946d3b6b3de15ce247dc89649df9035ce29e6b4e7ebe91919a25890ea2e79a"
+
+jobs:
+  release-pr-check:
+    runs-on: macos-15
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Refuse to delete an existing package
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          for file in pubspec.yaml lib/permate_attribution.dart; do
+            if git cat-file -e "${BASE_SHA}:${file}" 2>/dev/null && [ ! -f "$file" ]; then
+              echo "this change deletes $file, which exists on the base branch; the package must not be removed" >&2
+              exit 1
+            fi
+          done
+      - name: Detect the package
+        id: pkg
+        run: |
+          if [ -f pubspec.yaml ]; then echo "present=true" >> "$GITHUB_OUTPUT"; else echo "present=false" >> "$GITHUB_OUTPUT"; fi
+      - name: Check the package version is a stable release
+        if: steps.pkg.outputs.present == 'true'
+        run: |
+          version=$(sed -n 's/^version: *//p' pubspec.yaml)
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "pubspec version is not a stable release: $version" >&2; exit 1; }
+      - name: Install the pinned Flutter SDK
+        if: steps.pkg.outputs.present == 'true'
+        run: |
+          url="https://storage.googleapis.com/flutter_infra_release/releases/stable/macos/flutter_macos_arm64_${FLUTTER_VERSION}-stable.zip"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/flutter.zip" "$url"
+          echo "${FLUTTER_SHA256}  $RUNNER_TEMP/flutter.zip" | shasum -a 256 -c -
+          unzip -q "$RUNNER_TEMP/flutter.zip" -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+      - name: Resolve and dry-run
+        if: steps.pkg.outputs.present == 'true'
+        run: |
+          flutter pub get
+          dart pub publish --dry-run

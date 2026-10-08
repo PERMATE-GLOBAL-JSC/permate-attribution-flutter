@@ -1,0 +1,83 @@
+name: Publish to pub.dev
+
+# Production publication. Runs only for tags permate_attribution-v*; the publish
+# job needs approval in the `pub.dev` environment and authenticates to pub.dev
+# with GitHub OIDC. No pub token, deploy key, or personal access token is used.
+
+on:
+  push:
+    tags: ["permate_attribution-v*"]
+
+concurrency:
+  group: publish-pubdev-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions: {}
+
+env:
+  FLUTTER_VERSION: "3.47.6"
+  FLUTTER_SHA256: "a1946d3b6b3de15ce247dc89649df9035ce29e6b4e7ebe91919a25890ea2e79a"
+
+jobs:
+  validate:
+    runs-on: macos-15
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Check the tag, version, and branch
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          [[ "$TAG_NAME" =~ ^permate_attribution-v([0-9]+\.[0-9]+\.[0-9]+)$ ]] || { echo "not a stable release tag: $TAG_NAME" >&2; exit 1; }
+          version=$(sed -n 's/^version: *//p' pubspec.yaml)
+          [ "$version" = "${BASH_REMATCH[1]}" ] || { echo "tag version ${BASH_REMATCH[1]} != pubspec version $version" >&2; exit 1; }
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main || { echo "tag commit is not on main" >&2; exit 1; }
+      - name: Install the pinned Flutter SDK
+        run: |
+          url="https://storage.googleapis.com/flutter_infra_release/releases/stable/macos/flutter_macos_arm64_${FLUTTER_VERSION}-stable.zip"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/flutter.zip" "$url"
+          echo "${FLUTTER_SHA256}  $RUNNER_TEMP/flutter.zip" | shasum -a 256 -c -
+          unzip -q "$RUNNER_TEMP/flutter.zip" -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+      - name: Resolve and dry-run
+        run: |
+          flutter pub get
+          dart pub publish --dry-run
+
+  publish:
+    needs: validate
+    runs-on: macos-15
+    timeout-minutes: 30
+    environment: pub.dev
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install the pinned Flutter SDK
+        run: |
+          url="https://storage.googleapis.com/flutter_infra_release/releases/stable/macos/flutter_macos_arm64_${FLUTTER_VERSION}-stable.zip"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/flutter.zip" "$url"
+          echo "${FLUTTER_SHA256}  $RUNNER_TEMP/flutter.zip" | shasum -a 256 -c -
+          unzip -q "$RUNNER_TEMP/flutter.zip" -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+      - name: Authenticate to pub.dev with GitHub OIDC
+        # Equivalent to what dart-lang/setup-dart does; avoids a third-party action.
+        run: |
+          response=$(curl -fsSL --retry 3 -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://pub.dev")
+          token=$(printf '%s' "$response" | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')
+          echo "::add-mask::$token"
+          echo "PUB_TOKEN=$token" >> "$GITHUB_ENV"
+      - name: Publish
+        run: |
+          flutter pub get
+          dart pub token add https://pub.dev --env-var PUB_TOKEN
+          dart pub publish --force

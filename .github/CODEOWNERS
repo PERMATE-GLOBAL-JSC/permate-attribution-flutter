@@ -1,0 +1,7 @@
+# Individual owners until the organization has teams. Every path needs review by
+# at least one of them; two distinct people are always involved in a release
+# because the pub.dev environment prevents self-review.
+*                      @sangbui-pm @thinhvanung
+/.github/              @sangbui-pm @thinhvanung
+/.github/CODEOWNERS    @sangbui-pm @thinhvanung
+/SECURITY.md           @sangbui-pm @thinhvanung

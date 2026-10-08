@@ -1,0 +1,53 @@
+name: Preview ref check
+
+# Read-only validation of a rendered preview ref. The ref is created by the
+# organization's GitHub App from the private source; this workflow cannot
+# publish: no id-token, no environment, no secrets.
+
+on:
+  push:
+    branches: ["preview/**"]
+
+concurrency:
+  group: preview-ref-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+env:
+  FLUTTER_VERSION: "3.47.6"
+  FLUTTER_SHA256: "a1946d3b6b3de15ce247dc89649df9035ce29e6b4e7ebe91919a25890ea2e79a"
+
+jobs:
+  check:
+    runs-on: macos-15
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Check the ref name
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          [[ "$REF_NAME" =~ ^preview/[0-9a-f]{40}/[0-9]+$ ]] || { echo "unexpected preview ref: $REF_NAME" >&2; exit 1; }
+      - name: Check the package version is a preview
+        run: |
+          version=$(sed -n 's/^version: *//p' pubspec.yaml)
+          case "$version" in
+            *-preview.[0-9]*) ;;
+            *) echo "pubspec version is not a preview: $version" >&2; exit 1 ;;
+          esac
+      - name: Install the pinned Flutter SDK
+        run: |
+          url="https://storage.googleapis.com/flutter_infra_release/releases/stable/macos/flutter_macos_arm64_${FLUTTER_VERSION}-stable.zip"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/flutter.zip" "$url"
+          echo "${FLUTTER_SHA256}  $RUNNER_TEMP/flutter.zip" | shasum -a 256 -c -
+          unzip -q "$RUNNER_TEMP/flutter.zip" -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+      - name: Resolve and dry-run
+        run: |
+          flutter pub get
+          dart pub publish --dry-run
