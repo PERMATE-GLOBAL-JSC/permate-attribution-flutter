@@ -156,26 +156,43 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
       - name: Boot an Android emulator
+        timeout-minutes: 20
         run: |
           set -euo pipefail
           sdk="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
           export PATH="$sdk/cmdline-tools/latest/bin:$sdk/platform-tools:$sdk/emulator:$PATH"
           image="system-images;android-34;google_apis;x86_64"
+          ls -l /dev/kvm
           yes | sdkmanager --licenses > /dev/null || true
           sdkmanager "emulator" "platform-tools" "$image" > /dev/null
           echo no | avdmanager create avd --name demo --package "$image" --device pixel_6 --force
-          nohup emulator -avd demo -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect \
+          nohup emulator -avd demo -no-window -no-audio -no-boot-anim -no-snapshot -no-metrics -accel on -gpu swiftshader_indirect \
             > "$RUNNER_TEMP/emulator.log" 2>&1 &
-          adb wait-for-device
-          for _ in $(seq 1 90); do
-            [[ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == 1 ]] && break
+          emulator_pid=$!
+          booted=""
+          for _ in $(seq 1 120); do
+            if ! kill -0 "$emulator_pid" 2>/dev/null; then echo "the emulator process exited" >&2; break; fi
+            if [[ "$(timeout 10 adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == 1 ]]; then booted=1; break; fi
             sleep 5
           done
-          [[ "$(adb shell getprop sys.boot_completed | tr -d '\r')" == 1 ]] || { tail -n 50 "$RUNNER_TEMP/emulator.log" >&2; exit 1; }
+          if [[ -z "$booted" ]]; then
+            echo "the emulator did not boot; log tail:" >&2
+            tail -n 80 "$RUNNER_TEMP/emulator.log" >&2
+            adb devices -l >&2 || true
+            exit 1
+          fi
           adb devices
           echo "$sdk/platform-tools" >> "$GITHUB_PATH"
       - name: Runtime smoke on the emulator
+        timeout-minutes: 25
         run: bash bundle/flutter-consumer/demo/demo.sh smoke android emulator-5554
+      - name: Emulator diagnostics
+        if: failure() || cancelled()
+        run: |
+          sdk="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          tail -n 80 "$RUNNER_TEMP/emulator.log" || true
+          "$sdk/platform-tools/adb" devices -l || true
+          "$sdk/platform-tools/adb" logcat -d 2>/dev/null | tail -n 150 || true
       - name: Rollback and rebuild without the dependency
         run: bash bundle/flutter-consumer/demo/demo.sh rollback android
 
@@ -216,6 +233,13 @@ jobs:
           xcrun simctl bootstatus "$udid" -b > /dev/null
           echo "SIMULATOR_UDID=$udid" >> "$GITHUB_ENV"
       - name: Runtime smoke on the simulator
+        timeout-minutes: 25
         run: bash bundle/flutter-consumer/demo/demo.sh smoke ios "$SIMULATOR_UDID"
+      - name: Simulator diagnostics
+        if: failure() || cancelled()
+        run: |
+          xcrun simctl list devices booted || true
+          xcrun simctl spawn "$SIMULATOR_UDID" log show --last 30m --style compact 2>/dev/null | tail -n 250 || true
+          ls -lt "$HOME/Library/Logs/DiagnosticReports" 2>/dev/null | head -n 10 || true
       - name: Rollback and rebuild without the dependency
         run: bash bundle/flutter-consumer/demo/demo.sh rollback ios
