@@ -163,9 +163,13 @@ jobs:
           export PATH="$sdk/cmdline-tools/latest/bin:$sdk/platform-tools:$sdk/emulator:$PATH"
           image="system-images;android-34;google_apis;x86_64"
           ls -l /dev/kvm
+          # avdmanager and the emulator must agree on where the AVD lives, or the emulator reports an unknown AVD.
+          export ANDROID_AVD_HOME="$RUNNER_TEMP/avd"
+          mkdir -p "$ANDROID_AVD_HOME"
           yes | sdkmanager --licenses > /dev/null || true
           sdkmanager "emulator" "platform-tools" "$image" > /dev/null
           echo no | avdmanager create avd --name demo --package "$image" --device pixel_6 --force
+          emulator -list-avds
           nohup emulator -avd demo -no-window -no-audio -no-boot-anim -no-snapshot -no-metrics -accel on -gpu swiftshader_indirect \
             > "$RUNNER_TEMP/emulator.log" 2>&1 &
           emulator_pid=$!
@@ -192,7 +196,7 @@ jobs:
           sdk="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
           tail -n 80 "$RUNNER_TEMP/emulator.log" || true
           "$sdk/platform-tools/adb" devices -l || true
-          "$sdk/platform-tools/adb" logcat -d 2>/dev/null | tail -n 150 || true
+          timeout 30 "$sdk/platform-tools/adb" logcat -d 2>/dev/null | tail -n 150 || true
       - name: Rollback and rebuild without the dependency
         run: bash bundle/flutter-consumer/demo/demo.sh rollback android
 
