@@ -2,7 +2,12 @@ name: Release PR check
 
 # Read-only validation of pull requests into main, including the production render
 # opened by the organization's GitHub App. The `release-pr-check` job is a required
-# status check in the main ruleset.
+# status check in the main ruleset, which also requires the branch to be up to date.
+# A production branch `release/<version>` must be exactly one commit whose only parent is
+# the current main. Only the writer App may create or update `release/*` (ruleset
+# `release-branches`, no rewrites), and it pushes only the commit render-production.yml
+# staged and tree-verified; together with the up-to-date rule, the squash-merged tree is
+# the rendered candidate's tree. If main moved, render a new candidate.
 
 on:
   pull_request:
@@ -39,6 +44,18 @@ jobs:
               exit 1
             fi
           done
+      - name: A production branch is exactly one rendered commit on the current main
+        if: startsWith(github.event.pull_request.head.ref, 'release/')
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          [[ "$HEAD_REPO" == "$GITHUB_REPOSITORY" ]] || { echo "a release branch must come from this repository" >&2; exit 1; }
+          git fetch --no-tags --depth=2 origin "$HEAD_SHA"
+          parents=$(git rev-list --parents -n 1 "$HEAD_SHA")
+          [[ "$parents" == "$HEAD_SHA $BASE_SHA" ]] \
+            || { echo "release branch head must be one commit whose only parent is the current main ($BASE_SHA); render a new candidate" >&2; exit 1; }
       - name: Detect the package
         id: pkg
         run: |
