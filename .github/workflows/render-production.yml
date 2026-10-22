@@ -118,7 +118,8 @@ jobs:
             --output bundle/candidate.json > summary.json
           python3 source/scripts/flutter_release_candidate.py validate --source-root source --manifest bundle/candidate.json \
             --tree bundle/rendered --native-input bundle/native-input.json > /dev/null
-          (cd bundle/rendered && find . -type f | sort) > bundle/rendered-files.txt
+          # Byte order (LC_ALL=C): this list is built on macOS and compared on Linux, whose default collations differ.
+          (cd bundle/rendered && find . -type f | LC_ALL=C sort) > bundle/rendered-files.txt
           mkdir -p bundle/verification
           cp source/scripts/flutter_public_tree.py bundle/scripts/
           cp -R source/verification/flutter-consumer bundle/verification/flutter-consumer
@@ -218,7 +219,7 @@ jobs:
             exit 1
           fi
           # Same file set and same bytes as the rendered, scanned package; only the governance files are extra.
-          git ls-files | grep -v -e '^\.github/' -e '^SECURITY\.md$' | sed 's|^|./|' | sort > "$RUNNER_TEMP/committed-files.txt"
+          git ls-files | grep -v -e '^\.github/' -e '^SECURITY\.md$' | sed 's|^|./|' | LC_ALL=C sort > "$RUNNER_TEMP/committed-files.txt"
           cmp "$RUNNER_TEMP/committed-files.txt" "$BUNDLE/rendered-files.txt" \
             || { echo "committed file set differs from the rendered package" >&2; exit 1; }
           while IFS= read -r file; do
