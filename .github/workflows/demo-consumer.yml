@@ -225,14 +225,21 @@ jobs:
         run: bash bundle/flutter-consumer/demo/demo.sh pin-check
       - name: Cold iOS simulator build from the committed lockfile, native digest check
         run: bash bundle/flutter-consumer/demo/demo.sh build ios
-      - name: Boot an iOS simulator
+      - name: Boot an iOS simulator whose runtime matches the selected Xcode SDK
         run: |
           set -euo pipefail
-          udid=$(xcrun simctl list devices available -j | python3 -c '
-          import json, sys
-          devices = json.load(sys.stdin)["devices"]
-          print(next(d["udid"] for runtime in sorted(devices, reverse=True) if "iOS" in runtime for d in devices[runtime] if d["name"].startswith("iPhone")))
+          # The newest runtime on the image (iOS 26.x) is newer than the selected Xcode's SDK; on that pairing the Flutter
+          # tool did not find the app's VM service (smoke hung at "Waiting for VM Service port"). Use the SDK's own runtime.
+          sdk=$(xcrun --sdk iphonesimulator --show-sdk-version)
+          xcrun simctl list runtimes
+          udid=$(xcrun simctl list devices available -j | SDK="$sdk" python3 -c '
+          import json, os, sys
+          runtime = "com.apple.CoreSimulator.SimRuntime.iOS-" + os.environ["SDK"].replace(".", "-")
+          devices = json.load(sys.stdin)["devices"].get(runtime, [])
+          print(next((d["udid"] for d in devices if d["name"].startswith("iPhone") and d["isAvailable"]), ""))
           ')
+          [[ -n "$udid" ]] || { echo "no available iPhone simulator for the iOS $sdk runtime of the selected Xcode" >&2; exit 1; }
+          echo "iOS $sdk simulator $udid"
           xcrun simctl boot "$udid"
           xcrun simctl bootstatus "$udid" -b > /dev/null
           echo "SIMULATOR_UDID=$udid" >> "$GITHUB_ENV"
